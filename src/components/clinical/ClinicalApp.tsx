@@ -1,4 +1,3 @@
-import { lovable } from "@/integrations/lovable/index";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,6 +30,7 @@ import {
   Trash2,
   Upload,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -110,7 +110,7 @@ type Student = {
 type ToastState = { type: "success" | "error" | "info"; message: string } | null;
 
 type AuthMode = "login" | "signup";
-type MainView = "dashboard" | "create" | "search" | "upload" | "note" | "record" | "student" | "reports" | "import";
+type MainView = "dashboard" | "create" | "search" | "upload" | "note" | "record" | "student" | "students-list" | "reports" | "import";
 
 const patientSchema = z.object({
   name: z.string().trim().min(2, "Full name is required").max(160),
@@ -158,6 +158,7 @@ const CHART_COLORS = ["#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#0
 const navItems: Array<{ view: MainView; label: string; icon: typeof Activity }> = [
   { view: "dashboard", label: "Dashboard", icon: Activity },
   { view: "student", label: "Student Details", icon: GraduationCap },
+  { view: "students-list", label: "Student Management", icon: Users },
   { view: "create", label: "Create Patient", icon: Plus },
   { view: "import", label: "Import Patients (CSV)", icon: FileUp },
   { view: "search", label: "Search Patient", icon: Search },
@@ -224,6 +225,12 @@ export function ClinicalApp() {
     () => visitNotes.filter((note) => note.patient_id === selectedPatient?.id),
     [visitNotes, selectedPatient],
   );
+
+  useEffect(() => {
+    if (view === "record" && !selectedPatient) {
+      setView("search");
+    }
+  }, [view, selectedPatient]);
 
   useEffect(() => {
     let active = true;
@@ -316,9 +323,13 @@ export function ClinicalApp() {
       supabase.from("students").select("*").order("created_at", { ascending: false }).limit(200),
     ]);
 
-    if (patientsResponse.error || labsResponse.error || notesResponse.error) {
+    if (patientsResponse.error || labsResponse.error || notesResponse.error || studentsResponse.error) {
       showToast(
-        patientsResponse.error?.message || labsResponse.error?.message || notesResponse.error?.message || "Unable to load records",
+        patientsResponse.error?.message ||
+          labsResponse.error?.message ||
+          notesResponse.error?.message ||
+          studentsResponse.error?.message ||
+          "Unable to load records",
         "error",
       );
     }
@@ -477,6 +488,9 @@ export function ClinicalApp() {
             />
           )}
           {view === "student" && <StudentDetailsView reload={loadClinicalData} showToast={showToast} />}
+          {view === "students-list" && (
+            <StudentManagementView students={students} reload={loadClinicalData} showToast={showToast} />
+          )}
           {view === "reports" && (
             <ReportsView patients={patients} students={students} labResults={labResults} visitNotes={visitNotes} />
           )}
@@ -595,13 +609,6 @@ function AuthScreen({ showToast }: { showToast: (message: string, type?: "succes
         showToast("Check your email to verify your staff account.", "success");
       }
     }
-  }
-
-  async function handleGoogle() {
-    setBusy(true);
-    const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin });
-    setBusy(false);
-    if (result.error) showToast(result.error.message, "error");
   }
 
   async function handleDemoLogin() {
@@ -738,16 +745,6 @@ function AuthScreen({ showToast }: { showToast: (message: string, type?: "succes
               {busy ? "Please wait…" : "Demo Login"}
             </Button>
           )}
-
-          <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
-            <div className="h-px flex-1 bg-border" />
-            or
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          <Button className="w-full" variant="outline" size="lg" onClick={handleGoogle} disabled={busy}>
-            Continue with Google
-          </Button>
 
           <button
             className="mt-5 w-full text-center text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1019,6 +1016,218 @@ function StudentDetailsView({
           </div>
         </form>
       </Panel>
+    </div>
+  );
+}
+
+function StudentManagementView({
+  students,
+  reload,
+  showToast,
+}: {
+  students: Student[];
+  reload: () => Promise<void>;
+  showToast: (message: string, type?: "success" | "error" | "info") => void;
+}) {
+  const [selected, setSelected] = useState<Student | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(
+      (s) =>
+        `${s.first_name} ${s.last_name}`.toLowerCase().includes(q) ||
+        s.student_id.toLowerCase().includes(q) ||
+        s.email.toLowerCase().includes(q) ||
+        (s.department ?? "").toLowerCase().includes(q),
+    );
+  }, [students, searchTerm]);
+
+  async function handleDelete(student: Student) {
+    if (!window.confirm(`Permanently delete student "${student.first_name} ${student.last_name}"? This cannot be undone.`)) return;
+    setDeleting(true);
+    const { error } = await supabase.from("students").delete().eq("id", student.id);
+    setDeleting(false);
+    if (error) {
+      showToast(error.message, "error");
+      return;
+    }
+    showToast("Student record deleted", "success");
+    setSelected(null);
+    await reload();
+  }
+
+  return (
+    <div className="space-y-5">
+      <Panel title="Student Management" eyebrow={`${students.length} registered student${students.length !== 1 ? "s" : ""}`}>
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2 shadow-soft">
+          <Search className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <input
+            className="h-10 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search by name, student ID, email or department…"
+          />
+          {searchTerm && (
+            <button onClick={() => setSearchTerm("")} className="text-muted-foreground hover:text-foreground">
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon={Users}
+            text={students.length === 0 ? "No student records yet." : "No students match your search."}
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Student ID</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Name</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Email</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Department</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Program</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Year</th>
+                    <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Registered</th>
+                    <th className="px-4 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filtered.map((s) => (
+                    <tr
+                      key={s.id}
+                      className="cursor-pointer transition-colors hover:bg-muted/40"
+                      onClick={() => setSelected(s)}
+                    >
+                      <td className="px-4 py-3 font-mono text-xs text-primary">{s.student_id}</td>
+                      <td className="px-4 py-3 font-medium text-card-foreground">
+                        {s.first_name} {s.last_name}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.email}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.department ?? "—"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.program ?? "—"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.year_of_study ?? "—"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatDate(s.created_at.slice(0, 10))}</td>
+                      {/* <td className="px-4 py-3">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(s); }}
+                          className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          title="Delete student"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td> */}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Showing {filtered.length} of {students.length} student{students.length !== 1 ? "s" : ""}
+            </p>
+          </>
+        )}
+      </Panel>
+
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm"
+          onClick={() => setSelected(null)}
+        >
+          <div
+            className="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-card shadow-clinical"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-border p-6">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-primary">{selected.student_id}</p>
+                <h2 className="mt-1 text-xl font-bold text-card-foreground">
+                  {selected.first_name} {selected.last_name}
+                </h2>
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div>
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-primary">Personal Information</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Info label="Email" value={selected.email} />
+                  <Info label="Phone" value={selected.phone ?? "Not recorded"} />
+                  <Info label="Date of Birth" value={formatDate(selected.date_of_birth)} />
+                  <Info
+                    label="Gender"
+                    value={selected.gender.charAt(0).toUpperCase() + selected.gender.slice(1)}
+                  />
+                  <Info label="Address" value={selected.address ?? "Not recorded"} />
+                </div>
+              </div>
+
+              <div className="h-px bg-border" />
+
+              <div>
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-primary">Academic Information</p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Info label="Department" value={selected.department ?? "Not recorded"} />
+                  <Info label="Program" value={selected.program ?? "Not recorded"} />
+                  <Info label="Year of Study" value={selected.year_of_study?.toString() ?? "Not recorded"} />
+                </div>
+              </div>
+
+              <div className="h-px bg-border" />
+
+              <div>
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-primary">Emergency Contact</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Info label="Contact Name" value={selected.emergency_contact_name ?? "Not recorded"} />
+                  <Info label="Contact Phone" value={selected.emergency_contact_phone ?? "Not recorded"} />
+                </div>
+              </div>
+
+              {selected.medical_notes && (
+                <>
+                  <div className="h-px bg-border" />
+                  <div>
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-primary">Medical Notes</p>
+                    <div className="rounded-lg border border-border bg-background/70 p-3">
+                      <p className="break-words text-sm text-card-foreground">{selected.medical_notes}</p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="h-px bg-border" />
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Info label="Registered" value={formatDate(selected.created_at.slice(0, 10))} />
+                <Info label="Last Updated" value={formatDate(selected.updated_at.slice(0, 10))} />
+              </div>
+            </div>
+
+            <div className="border-t border-border p-6">
+              <Button
+                variant="destructive"
+                onClick={() => handleDelete(selected)}
+                disabled={deleting}
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleting ? "Deleting…" : "Delete Student"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1824,6 +2033,12 @@ function LabUploadView({
   const [file, setFile] = useState<File | null>(null);
   const [form, setForm] = useState({ patientId: preselected?.id || "", testName: "", result: "", date: getToday() });
 
+  useEffect(() => {
+    if (preselected?.id) {
+      setForm((current) => ({ ...current, patientId: preselected.id }));
+    }
+  }, [preselected?.id]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const parsed = labSchema.safeParse(form);
@@ -1855,6 +2070,9 @@ function LabUploadView({
     });
     setBusy(false);
     if (error) {
+      if (filePath) {
+        await supabase.storage.from("lab-results").remove([filePath]);
+      }
       showToast(error.message, "error");
       return;
     }
@@ -1910,6 +2128,12 @@ function VisitNoteView({
     treatment: "",
     doctorName: "",
   });
+
+  useEffect(() => {
+    if (preselected?.id) {
+      setForm((current) => ({ ...current, patientId: preselected.id }));
+    }
+  }, [preselected?.id]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

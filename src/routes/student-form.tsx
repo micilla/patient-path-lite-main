@@ -1,11 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
+import { Input } from "@/components/ui/input";
 import {
   AlertCircle,
   CheckCircle2,
   GraduationCap,
-  Heart,
-  Scale,
   ShieldCheck,
   Stethoscope,
   UserRound,
@@ -27,22 +26,62 @@ export const Route = createFileRoute("/student-form")({
   component: StudentFormPage,
 });
 
+function optionalNumber(
+  min: number,
+  max: number,
+  rangeMessage: string,
+) {
+  return z.union([z.literal(""), z.coerce.number()]).transform((value, ctx) => {
+    if (value === "") return "";
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid number" });
+      return z.NEVER;
+    }
+    if (value < min || value > max) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: rangeMessage });
+      return z.NEVER;
+    }
+    return value;
+  });
+}
+
 const schema = z.object({
   firstName: z.string().trim().min(2, "First name is required").max(80),
   lastName: z.string().trim().min(2, "Last name is required").max(80),
   email: z.string().trim().email("A valid email address is required").max(160),
   dateOfBirth: z.string().optional(),
-  age: z.coerce.number().min(1).max(120).optional().or(z.literal("")),
+  age: optionalNumber(1, 120, "Age must be between 1 and 120 years"),
   gender: z.enum(["female", "male", "other", "unknown"]),
   maritalStatus: z.enum(["single", "married", "divorced", "widowed", "other", "prefer_not_to_say"]),
   phone: z.string().trim().max(30).optional(),
-  weightKg: z.coerce.number().min(1).max(500).optional().or(z.literal("")),
-  heightM: z.coerce.number().min(0.3).max(3).optional().or(z.literal("")),
+  weightKg: optionalNumber(1, 500, "Weight must be between 1 and 500 kg"),
+  heightM: z
+    .union([z.literal(""), z.coerce.number()])
+    .transform((value, ctx) => {
+      if (value === "") return "";
+      const metres = typeof value === "number" && value > 3 ? value / 100 : value;
+      if (typeof metres !== "number" || Number.isNaN(metres)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid height" });
+        return z.NEVER;
+      }
+      if (metres < 0.3 || metres > 3) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Height must be between 0.3 m and 3 m (e.g. 1.72 or 172 cm)",
+        });
+        return z.NEVER;
+      }
+      return metres;
+    }),
   parentsName: z.string().trim().max(200).optional(),
   residentialAddress: z.string().trim().max(400).optional(),
   department: z.string().trim().max(100).optional(),
   program: z.string().trim().max(160).optional(),
-  yearOfStudy: z.coerce.number().min(1).max(8).optional().or(z.literal("")),
+  yearOfStudy: optionalNumber(
+    1,
+    8,
+    "Year of study must be 1–8 (e.g. 1 = first year, 4 = fourth year). Do not enter a calendar year like 2025.",
+  ),
   emergencyContactName: z.string().trim().max(160).optional(),
   emergencyContactPhone: z.string().trim().max(30).optional(),
   medicalNotes: z.string().trim().max(2000).optional(),
@@ -299,11 +338,11 @@ function StudentFormPage() {
                   placeholder="e.g. 65"
                 />
                 <FormField
-                  label="Height (metres)"
+                  label="Height"
                   type="number"
                   value={form.heightM}
                   onChange={set("heightM")}
-                  placeholder="e.g. 1.72"
+                  placeholder="e.g. 1.72 m or 172 cm"
                 />
 
                 {/* Row 6: Phone | Parent's Name */}
@@ -359,11 +398,11 @@ function StudentFormPage() {
                   placeholder="e.g. BSc Computer Science"
                 />
                 <FormField
-                  label="Year of Study"
+                  label="Year of Study (1–8)"
                   type="number"
                   value={form.yearOfStudy}
                   onChange={set("yearOfStudy")}
-                  placeholder="e.g. 2"
+                  placeholder="e.g. 2 for second year"
                 />
               </div>
             </section>
@@ -471,13 +510,12 @@ function FormField({
         {label}
         {required && <span className="ml-1 text-destructive">*</span>}
       </span>
-      <input
+      <Input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
-        className="clinical-input"
         step={type === "number" ? "any" : undefined}
       />
     </label>
